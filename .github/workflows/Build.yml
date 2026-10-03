@@ -1,0 +1,73 @@
+name: Build Madeira IPA
+
+on:
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+jobs:
+  build:
+    runs-on: macos-14 # macOS environment with Xcode tools preinstalled
+    
+    steps:
+      - name: Checkout Repository with Submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive # Critical for compiling customized Wine/FEX dependencies
+
+      - name: Setup Environment and Fetch Windows Runtime Components
+        run: |
+          echo "Fetching Microsoft CAB components for required VC++ runtime environments..."
+          chmod +x tools/fetch_deps.sh || true
+          ./tools/fetch_deps.sh || echo "Script complete"
+
+      - name: Compile Native Unix Subsystems
+        run: |
+          echo "Building native components and ARM translation layers..."
+          chmod +x build_native.sh || true
+          ./build_native.sh
+
+      - name: Create ExportOptions.plist
+        run: |
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>development</string>
+              <key>compileBitcode</key>
+              <false/>
+              <key>signingStyle</key>
+              <string>manual</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Build Xcode Archive
+        run: |
+          xcodebuild clean archive \
+            -workspace Madeira.xcworkspace \
+            -scheme Madeira \
+            -configuration Release \
+            -archivePath build/Madeira.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Export Unsigned IPA Bundle
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/Madeira.xcarchive \
+            -exportPath build/output \
+            -exportOptionsPlist ExportOptions.plist \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Rename and Prepare Artifact
+        run: |
+          mv build/output/Madeira.ipa build/output/Madeira-unsigned.ipa
+
+      - name: Upload IPA to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Madeira-Unsigned-IPA
+          path: build/output/Madeira-unsigned.ipa
